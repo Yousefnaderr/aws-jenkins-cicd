@@ -62,7 +62,7 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                withAWS(region: "${AWS_REGION}", credentials: 'aws-jenkins-cred') {
+                withAWS(region: "${AWS_REGION}", credentials: 'aws-credentials') {
                     sh '''
                         ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${EC2_HOST} <<EOF
                         echo "Pulling latest image and restarting container..."
