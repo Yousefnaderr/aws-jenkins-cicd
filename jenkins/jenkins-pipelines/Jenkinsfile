@@ -42,7 +42,7 @@ pipeline {
                         sudo docker pull ${ECR_URI}:${IMAGE_TAG}
                         sudo docker stop app || true
                         sudo docker rm app || true
-                        sudo docker run -d -p 80:80 --name app ${ECR_URI}:${IMAGE_TAG}
+                        sudo docker run -d -p 804:804 --name app ${ECR_URI}:${IMAGE_TAG}
                     EOF
                 '''
             }
