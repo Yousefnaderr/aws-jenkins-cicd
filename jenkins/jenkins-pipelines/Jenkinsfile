@@ -1,0 +1,97 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION      = 'eu-central-1'
+        ECR_REPO        = 'aws-project-app'
+        IMAGE_TAG       = "backend-${env.BUILD_NUMBER}"
+        APP_DIR         = 'small-backend-project'
+        AWS_CREDENTIALS = credentials('aws-credentials')
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh '''
+                        python3 -m venv venv
+                        source venv/bin/activate
+                        pip install --upgrade pip
+                        pip install -r requirements.txt
+                    '''
+                }
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh '''
+                        source venv/bin/activate
+                        pytest tests/ --maxfail=1 --disable-warnings -q
+                    '''
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh '''
+                        docker build -t $ECR_REPO:$IMAGE_TAG .
+                    '''
+                }
+            }
+        }
+
+        stage('Login & Push to ECR') {
+            steps {
+                withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                    sh '''
+                        AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                        ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO"
+
+                        # Login to ECR
+                        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_URI
+
+                        # Tag and Push Image
+                        docker tag $ECR_REPO:$IMAGE_TAG $ECR_URI:$IMAGE_TAG
+                        docker push $ECR_URI:$IMAGE_TAG
+                    '''
+                }
+            }
+        }
+
+        stage('Terraform Deploy on EC2') {
+            steps {
+                dir('terraform') {
+                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                        sh '''
+                            terraform init -input=false
+                            terraform apply -auto-approve -input=false
+                        '''
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Deployment completed successfully!"
+        }
+        failure {
+            echo "❌ Build or deployment failed — check logs above."
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
+
