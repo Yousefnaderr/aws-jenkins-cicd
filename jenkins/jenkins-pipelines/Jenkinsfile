@@ -14,9 +14,11 @@ pipeline {
     stages {
         stage('Build Docker Image') {
             steps {
-                sh '''
-                    docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-                '''
+                dir('small-backend-project') {
+                    sh '''
+                        docker build -t ${ECR_REPO}:${IMAGE_TAG} .
+                    '''
+                }
             }
         }
 
