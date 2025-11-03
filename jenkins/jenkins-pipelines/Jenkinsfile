@@ -2,62 +2,28 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = 'eu-central-1'
+        AWS_REGION = 'us-east-1'
         AWS_ACCOUNT_ID = '470646073586'
-        ECR_REPO = 'aws-project-app'
-        IMAGE_TAG = "backend-${BUILD_NUMBER}"
+        ECR_REPO = 'aws-jenkins-cicd-demo-app'
+        IMAGE_TAG = "build-${BUILD_NUMBER}"
         ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+        EC2_HOST = "ubuntu@10.0.1.92"
+        SSH_KEY = "/var/lib/jenkins/aws-key.pem"
     }
 
     stages {
-
-        stage('Checkout Code') {
-            steps {
-                git branch: 'main',
-                    credentialsId: 'github-credential',
-                    url: 'https://github.com/Yousefnaderr/aws-jenkins-cicd'
-            }
-        }
-
-        stage('Install Dependencies') {
-            steps {
-                dir('small-backend-project') {
-                    sh '''
-                        python3 -m venv venv
-                        . venv/bin/activate
-                        pip install --upgrade pip
-                        pip install -r requirements.txt
-                    '''
-                }
-            }
-        }
-
-        stage('Run Tests') {
-            steps {
-                dir('small-backend-project') {
-                    sh '''
-                        . venv/bin/activate
-                        pytest tests/ --maxfail=1 --disable-warnings -q
-                    '''
-                }
-            }
-        }
-
         stage('Build Docker Image') {
             steps {
-                dir('small-backend-project') {
-                    sh '''
-                        docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-                    '''
-                }
+                sh '''
+                    docker build -t ${ECR_REPO}:${IMAGE_TAG} .
+                '''
             }
         }
 
-        stage('Login & Push to ECR') {
+        stage('Push Image to ECR') {
             steps {
                 withAWS(region: "${AWS_REGION}", credentials: 'aws-credentials') {
                     sh '''
-                        echo "Logging in to ECR..."
                         aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URI}
                         docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}
                         docker push ${ECR_URI}:${IMAGE_TAG}
@@ -68,34 +34,25 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                withAWS(region: "${AWS_REGION}", credentials: 'aws-credentials') {
-                    sh '''
-                        echo "Deploying on EC2 instance..."
-                        ssh -o StrictHostKeyChecking=no -i /var/lib/jenkins/aws-key.pem ubuntu@10.0.1.92 <<EOF
-                            echo "Pulling latest image..."
-                            sudo docker login -u AWS -p $(aws ecr get-login-password --region eu-central-1) ${ECR_URI} || true
-                            sudo docker pull ${ECR_URI}:${IMAGE_TAG}
-                            
-                            echo "Restarting container..."
-                            sudo docker stop backend-app || true
-                            sudo docker rm backend-app || true
-                            sudo docker run -d -p 80:80 --name backend-app ${ECR_URI}:${IMAGE_TAG}
-                        EOF
-                    '''
-                }
+                sh '''
+                    ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ${EC2_HOST} <<EOF
+                        sudo docker login -u AWS -p $(aws ecr get-login-password --region ${AWS_REGION}) ${ECR_URI}
+                        sudo docker pull ${ECR_URI}:${IMAGE_TAG}
+                        sudo docker stop app || true
+                        sudo docker rm app || true
+                        sudo docker run -d -p 80:80 --name app ${ECR_URI}:${IMAGE_TAG}
+                    EOF
+                '''
             }
         }
     }
 
     post {
         success {
-            echo 'Build and deployment succeeded!'
+            echo "Deployment successful!"
         }
         failure {
-            echo 'Build or deployment failed.'
-        }
-        always {
-            cleanWs()
+            echo "Deployment failed!"
         }
     }
 }
