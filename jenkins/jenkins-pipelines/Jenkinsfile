@@ -7,6 +7,9 @@ pipeline {
         IMAGE_TAG       = "backend-${env.BUILD_NUMBER}"
         APP_DIR         = 'small-backend-project'
         AWS_CREDENTIALS = credentials('aws-credentials')
+        PEM_FILE        = '/var/lib/jenkins/aws-key.pem'
+        SSH_USER        = 'ubuntu'
+        EC2_IP          = '13.223.242.93'
     }
 
     stages {
@@ -19,10 +22,9 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 dir("${APP_DIR}") {
-                    sh '''#!/bin/bash
-                        set -e
+                    sh '''
                         python3 -m venv venv
-                        source venv/bin/activate
+                        . venv/bin/activate
                         pip install --upgrade pip
                         pip install -r requirements.txt
                     '''
@@ -33,9 +35,8 @@ pipeline {
         stage('Run Tests') {
             steps {
                 dir("${APP_DIR}") {
-                    sh '''#!/bin/bash
-                        set -e
-                        source venv/bin/activate
+                    sh '''
+                        . venv/bin/activate
                         pytest tests/ --maxfail=1 --disable-warnings -q
                     '''
                 }
@@ -45,8 +46,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 dir("${APP_DIR}") {
-                    sh '''#!/bin/bash
-                        set -e
+                    sh '''
                         docker build -t $ECR_REPO:$IMAGE_TAG .
                     '''
                 }
@@ -56,15 +56,14 @@ pipeline {
         stage('Login & Push to ECR') {
             steps {
                 withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
-                    sh '''#!/bin/bash
-                        set -e
+                    sh '''
                         AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                         ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO"
 
                         # Login to ECR
                         aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_URI
 
-                        # Tag and Push Image
+                        # Tag & Push Image
                         docker tag $ECR_REPO:$IMAGE_TAG $ECR_URI:$IMAGE_TAG
                         docker push $ECR_URI:$IMAGE_TAG
                     '''
@@ -72,24 +71,34 @@ pipeline {
             }
         }
 
-        stage('Terraform Deploy on EC2') {
+        stage('Deploy to EC2') {
             steps {
-                dir('terraform') {
-                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
-                        sh '''#!/bin/bash
-                            set -e
-                            terraform init -input=false
-                            terraform apply -auto-approve -input=false
-                        '''
-                    }
-                }
+                sh '''
+                    echo "🔗 Connecting to EC2 and deploying container..."
+                    ssh -o StrictHostKeyChecking=no -i ${PEM_FILE} ${SSH_USER}@${EC2_IP} << EOF
+                        set -e
+                        AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                        ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+
+                        # Login to ECR on EC2
+                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin $ECR_URI
+
+                        # Stop old container if exists
+                        docker stop backend-app || true
+                        docker rm backend-app || true
+
+                        # Pull and run new image
+                        docker pull $ECR_URI:${IMAGE_TAG}
+                        docker run -d --name backend-app -p 80:5000 $ECR_URI:${IMAGE_TAG}
+                    EOF
+                '''
             }
         }
     }
 
     post {
         success {
-            echo "Deployment completed successfully!"
+            echo "Deployment completed successfully and app is running on EC2!"
         }
         failure {
             echo "Build or deployment failed — check logs above."
