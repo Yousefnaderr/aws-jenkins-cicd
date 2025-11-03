@@ -7,16 +7,13 @@ pipeline {
         IMAGE_TAG       = "backend-${env.BUILD_NUMBER}"
         APP_DIR         = 'small-backend-project'
         AWS_CREDENTIALS = credentials('aws-credentials')
-        PEM_FILE        = '/var/lib/jenkins/aws-key.pem'
-        SSH_USER        = 'ubuntu'
-        EC2_IP          = '10.0.1.92'
+        EC2_HOST        = '10.0.1.92'
+        SSH_KEY_PATH    = '/var/lib/jenkins/aws-key.pem'
     }
 
     stages {
         stage('Checkout Code') {
-            steps {
-                checkout scm
-            }
+            steps { checkout scm }
         }
 
         stage('Install Dependencies') {
@@ -59,11 +56,7 @@ pipeline {
                     sh '''
                         AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                         ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO"
-
-                        # Login to ECR
                         aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_URI
-
-                        # Tag & Push Image
                         docker tag $ECR_REPO:$IMAGE_TAG $ECR_URI:$IMAGE_TAG
                         docker push $ECR_URI:$IMAGE_TAG
                     '''
@@ -74,22 +67,17 @@ pipeline {
         stage('Deploy to EC2') {
             steps {
                 sh '''
-                    echo "🔗 Connecting to EC2 and deploying container..."
-                    ssh -o StrictHostKeyChecking=no -i ${PEM_FILE} ${SSH_USER}@${EC2_IP} << EOF
-                        set -e
-                        AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-                        ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+                    echo "Connecting to EC2 and deploying container..."
+                    AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                    ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO"
 
-                        # Login to ECR on EC2
-                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin $ECR_URI
-
-                        # Stop old container if exists
-                        docker stop backend-app || true
-                        docker rm backend-app || true
-
-                        # Pull and run new image
-                        docker pull $ECR_URI:${IMAGE_TAG}
-                        docker run -d --name backend-app -p 80:5000 $ECR_URI:${IMAGE_TAG}
+                    ssh -o StrictHostKeyChecking=no -i $SSH_KEY_PATH ubuntu@$EC2_HOST << EOF
+                        echo "Pulling latest image and restarting container..."
+                        sudo docker login -u AWS -p $(aws ecr get-login-password --region $AWS_REGION) $ECR_URI
+                        sudo docker pull $ECR_URI:$IMAGE_TAG
+                        sudo docker stop backend-app || true
+                        sudo docker rm backend-app || true
+                        sudo docker run -d -p 80:5000 --name backend-app $ECR_URI:$IMAGE_TAG
                     EOF
                 '''
             }
@@ -97,15 +85,9 @@ pipeline {
     }
 
     post {
-        success {
-            echo "Deployment completed successfully and app is running on EC2!"
-        }
-        failure {
-            echo "Build or deployment failed — check logs above."
-        }
-        always {
-            cleanWs()
-        }
+        success { echo "Deployment completed successfully!" }
+        failure { echo "Build or deployment failed — check logs above." }
+        always  { cleanWs() }
     }
 }
 
