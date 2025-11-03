@@ -13,7 +13,7 @@ pipeline {
 
         stage('Checkout Code') {
             steps {
-                git branch: 'main', 
+                git branch: 'main',
                     credentialsId: 'github-credential',
                     url: 'https://github.com/Yousefnaderr/aws-jenkins-cicd'
             }
@@ -59,8 +59,6 @@ pipeline {
                     sh '''
                         echo "Logging in to ECR..."
                         aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URI}
-                        
-                        echo "Tagging and pushing image..."
                         docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}
                         docker push ${ECR_URI}:${IMAGE_TAG}
                     '''
@@ -70,21 +68,21 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                sh '''
-                echo "Connecting to EC2 and deploying container..."
-                ssh -o StrictHostKeyChecking=no -i /var/lib/jenkins/aws-key.pem ubuntu@10.0.1.92 << 'EOF'
-                    echo "Pulling latest image from ECR..."
-                    docker login -u AWS -p $(aws ecr get-login-password --region eu-central-1) 470646073586.dkr.ecr.eu-central-1.amazonaws.com || true
-                    docker pull 470646073586.dkr.ecr.eu-central-1.amazonaws.com/aws-project-app:${IMAGE_TAG}
-
-                    echo "Stopping old container if exists..."
-                    docker stop backend-app || true
-                    docker rm backend-app || true
-
-                    echo "Running new container..."
-                    docker run -d -p 80:80 --name backend-app 470646073586.dkr.ecr.eu-central-1.amazonaws.com/aws-project-app:${IMAGE_TAG}
-                EOF
-                '''
+                withAWS(region: "${AWS_REGION}", credentials: 'aws-credentials') {
+                    sh '''
+                        echo "Deploying on EC2 instance..."
+                        ssh -o StrictHostKeyChecking=no -i /var/lib/jenkins/aws-key.pem ubuntu@10.0.1.92 <<EOF
+                            echo "Pulling latest image..."
+                            sudo docker login -u AWS -p $(aws ecr get-login-password --region eu-central-1) ${ECR_URI} || true
+                            sudo docker pull ${ECR_URI}:${IMAGE_TAG}
+                            
+                            echo "Restarting container..."
+                            sudo docker stop backend-app || true
+                            sudo docker rm backend-app || true
+                            sudo docker run -d -p 80:80 --name backend-app ${ECR_URI}:${IMAGE_TAG}
+                        EOF
+                    '''
+                }
             }
         }
     }
