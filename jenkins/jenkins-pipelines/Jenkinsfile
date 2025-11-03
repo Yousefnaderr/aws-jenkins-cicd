@@ -9,7 +9,7 @@ pipeline {
         AWS_CREDENTIALS = credentials('aws-credentials')
         PEM_FILE        = '/var/lib/jenkins/aws-key.pem'
         SSH_USER        = 'ubuntu'
-        EC2_IP          = '13.223.242.93'
+        EC2_IP          = '10.0.1.92'
     }
 
     stages {
