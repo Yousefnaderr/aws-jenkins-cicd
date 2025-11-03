@@ -62,17 +62,16 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                withAWS(region: "${AWS_REGION}", credentials: 'aws-credentials') {
-                    sh '''
-                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${EC2_HOST} <<EOF
-                        echo "Pulling latest image and restarting container..."
-                        sudo docker pull ${ECR_REPO}:${IMAGE_TAG}
-                        sudo docker stop app || true
-                        sudo docker rm app || true
-                        sudo docker run -d --name app -p 80:80 ${ECR_REPO}:${IMAGE_TAG}
-                        EOF
-                    '''
-                }
+                echo "Deploying to EC2..."
+                sh '''
+                    ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${EC2_HOST} "
+                        echo 'Pulling latest image and restarting container...';
+                        sudo docker pull ${ECR_REPO}:${IMAGE_TAG};
+                        sudo docker stop app || true;
+                        sudo docker rm app || true;
+                        sudo docker run -d --name app -p 80:80 ${ECR_REPO}:${IMAGE_TAG};
+                    "
+                '''
             }
         }
     }
