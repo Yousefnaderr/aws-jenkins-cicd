@@ -12,8 +12,11 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout Code') {
-            steps { checkout scm }
+            steps {
+                checkout scm
+            }
         }
 
         stage('Install Dependencies') {
@@ -56,6 +59,7 @@ pipeline {
                     sh '''
                         AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                         ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO"
+
                         aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_URI
                         docker tag $ECR_REPO:$IMAGE_TAG $ECR_URI:$IMAGE_TAG
                         docker push $ECR_URI:$IMAGE_TAG
@@ -71,13 +75,22 @@ pipeline {
                     AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                     ECR_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO"
 
-                    ssh -o StrictHostKeyChecking=no -i $SSH_KEY_PATH ubuntu@$EC2_HOST << EOF
+                    ssh -o StrictHostKeyChecking=no -i $SSH_KEY_PATH ubuntu@$EC2_HOST << 'EOF'
                         echo "Pulling latest image and restarting container..."
+
+                        # Login and pull the latest image
                         sudo docker login -u AWS -p $(aws ecr get-login-password --region $AWS_REGION) $ECR_URI
                         sudo docker pull $ECR_URI:$IMAGE_TAG
-                        sudo docker stop backend-app || true
-                        sudo docker rm backend-app || true
+
+                        #Stop and remove any container using port 80 (if exists)
+                        sudo docker ps -q --filter "publish=80" | grep -q . && \
+                        sudo docker stop $(sudo docker ps -q --filter "publish=80") && \
+                        sudo docker rm $(sudo docker ps -q --filter "publish=80")
+
+                        # Run new backend container
                         sudo docker run -d -p 80:5000 --name backend-app $ECR_URI:$IMAGE_TAG
+
+                        echo "Deployment done successfully!"
                     EOF
                 '''
             }
@@ -85,9 +98,15 @@ pipeline {
     }
 
     post {
-        success { echo "Deployment completed successfully!" }
-        failure { echo "Build or deployment failed — check logs above." }
-        always  { cleanWs() }
+        success {
+            echo "Deployment completed successfully!"
+        }
+        failure {
+            echo "Build or deployment failed — check logs above."
+        }
+        always {
+            cleanWs()
+        }
     }
 }
 
