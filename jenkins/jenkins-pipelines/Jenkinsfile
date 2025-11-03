@@ -2,33 +2,34 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = 'us-east-1'
-        AWS_ACCOUNT_ID = '470646073586'
-        ECR_REPO = 'aws-jenkins-cicd-demo-app'
+        AWS_DEFAULT_REGION = 'us-east-1'
+        ECR_REPO = '470646073586.dkr.ecr.us-east-1.amazonaws.com/aws-jenkins-cicd-demo-app'
         IMAGE_TAG = "build-${BUILD_NUMBER}"
-        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
-        EC2_HOST = "ubuntu@10.0.1.92"
-        SSH_KEY = "/var/lib/jenkins/aws-key.pem"
+        SSH_KEY = '/var/lib/jenkins/aws-key.pem'
+        EC2_HOST = '10.0.1.92'
     }
 
     stages {
+        stage('Checkout SCM') {
+            steps {
+                git branch: 'main', credentialsId: 'github-credential', url: 'https://github.com/Yousefnaderr/aws-jenkins-cicd'
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
-                dir('small-backend-project') {
-                    sh '''
-                        docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-                    '''
-                }
+                sh '''
+                    docker build -t ${ECR_REPO}:${IMAGE_TAG} .
+                '''
             }
         }
 
         stage('Push Image to ECR') {
             steps {
-                withAWS(region: "${AWS_REGION}", credentials: 'aws-credentials') {
+                withAWS(region: "${AWS_DEFAULT_REGION}", credentials: 'aws-credentials') {
                     sh '''
-                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URI}
-                        docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}
-                        docker push ${ECR_URI}:${IMAGE_TAG}
+                        aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}
+                        docker push ${ECR_REPO}:${IMAGE_TAG}
                     '''
                 }
             }
@@ -36,25 +37,29 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                sh '''
-                    ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ${EC2_HOST} <<EOF
-                        sudo docker login -u AWS -p $(aws ecr get-login-password --region ${AWS_REGION}) ${ECR_URI}
-                        sudo docker pull ${ECR_URI}:${IMAGE_TAG}
-                        sudo docker stop app || true
-                        sudo docker rm app || true
-                        sudo docker run -d -p 804:804 --name app ${ECR_URI}:${IMAGE_TAG}
-                    EOF
-                '''
+                withAWS(region: "${AWS_DEFAULT_REGION}", credentials: 'aws-credentials') {
+                    sh '''
+                        echo "Deploying on EC2 instance..."
+                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${EC2_HOST} "
+                            sudo docker rm -f app || true &&
+                            sudo docker pull ${ECR_REPO}:${IMAGE_TAG} &&
+                            sudo docker run -d --name app -p 80:80 ${ECR_REPO}:${IMAGE_TAG}
+                        "
+                    '''
+                }
             }
         }
     }
 
     post {
         success {
-            echo "Deployment successful!"
+            echo 'Deployment completed successfully.'
         }
         failure {
-            echo "Deployment failed!"
+            echo 'Build or deployment failed.'
+        }
+        always {
+            cleanWs()
         }
     }
 }
